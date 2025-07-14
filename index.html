@@ -1,0 +1,233 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kalkulator Promocji Media Expert</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+  <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-2xl">
+    <h1 class="text-2xl font-bold text-center mb-4">Kalkulator Promocji Media Expert</h1>
+    <div id="products-container" class="space-y-4"></div>
+    <div class="flex justify-between mt-4">
+      <button id="add-product" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Dodaj produkt</button>
+      <button id="calculate" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Oblicz</button>
+      <button id="reset" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Wyzeruj</button>
+    </div>
+    <div id="result" class="mt-4 p-4 bg-gray-50 rounded hidden"></div>
+  </div>
+
+  <script>
+    const productsContainer = document.getElementById('products-container');
+    const addProductBtn = document.getElementById('add-product');
+    const calculateBtn = document.getElementById('calculate');
+    const resetBtn = document.getElementById('reset');
+    const resultDiv = document.getElementById('result');
+    let productCount = 0;
+
+    function addProduct() {
+      productCount++;
+      const productDiv = document.createElement('div');
+      productDiv.className = 'border p-4 rounded bg-gray-50';
+      productDiv.id = `product-${productCount}`;
+      productDiv.innerHTML = `
+        <div class="flex flex-col space-y-2">
+          <input type="text" id="name-${productCount}" placeholder="Nazwa produktu" class="border p-2 rounded">
+          <div class="flex items-center space-x-2">
+            <input type="checkbox" id="multidiscount-${productCount}" class="multidiscount-checkbox">
+            <label for="multidiscount-${productCount}">Multirabaty</label>
+            <input type="checkbox" id="discount-code-${productCount}" class="discount-code-checkbox">
+            <label for="discount-code-${productCount}">Kod rabatowy</label>
+          </div>
+          <div id="price-fields-${productCount}">
+            <input type="number" id="price-${productCount}" placeholder="Cena" class="border p-2 rounded w-full" min="0">
+          </div>
+        </div>
+      `;
+      productsContainer.appendChild(productDiv);
+
+      const discountCodeCheckbox = productDiv.querySelector(`#discount-code-${productCount}`);
+      const priceFields = productDiv.querySelector(`#price-fields-${productCount}`);
+      discountCodeCheckbox.addEventListener('change', () => {
+        if (discountCodeCheckbox.checked) {
+          priceFields.innerHTML = `
+            <input type="number" id="price-before-${productCount}" placeholder="Cena przed kodem" class="border p-2 rounded w-full mb-2" min="0">
+            <input type="number" id="price-after-${productCount}" placeholder="Cena po kodzie" class="border p-2 rounded w-full" min="0">
+          `;
+        } else {
+          priceFields.innerHTML = `
+            <input type="number" id="price-${productCount}" placeholder="Cena" class="border p-2 rounded w-full" min="0">
+          `;
+        }
+      });
+    }
+
+    function getProducts() {
+      const products = [];
+      for (let i = 1; i <= productCount; i++) {
+        const productDiv = document.getElementById(`product-${i}`);
+        if (!productDiv) continue;
+        const name = productDiv.querySelector(`#name-${i}`).value || `Produkt ${i}`;
+        const multidiscount = productDiv.querySelector(`#multidiscount-${i}`).checked;
+        const discountCode = productDiv.querySelector(`#discount-code-${i}`).checked;
+        let priceBefore, priceAfter;
+        if (discountCode) {
+          priceBefore = parseFloat(productDiv.querySelector(`#price-before-${i}`).value) || 0;
+          priceAfter = parseFloat(productDiv.querySelector(`#price-after-${i}`).value) || 0;
+        } else {
+          priceBefore = parseFloat(productDiv.querySelector(`#price-${i}`).value) || 0;
+          priceAfter = priceBefore;
+        }
+        if (priceBefore > 0) {
+          products.push({ name, multidiscount, discountCode, priceBefore, priceAfter });
+        }
+      }
+      return products;
+    }
+
+    function calculateBestPrice(products) {
+      if (products.length === 0) return { total: 0, description: "Brak produktów do obliczenia." };
+
+      let bestTotal = Infinity;
+      let bestDescription = "";
+      const multiDiscounts = [
+        { count: 2, discount: 0.3 },
+        { count: 3, discount: 0.55 },
+        { count: 4, discount: 0.8 },
+        { count: 5, discount: 0.99, altPrice: 1 }
+      ];
+
+      // Funkcja obliczająca cenę dla danej kombinacji multirabatów i kodów
+      function calculateTotal(multiProducts, codeProducts) {
+        let total = 0;
+        let description = [];
+        const multiCount = multiProducts.length;
+
+        // Obliczanie dla produktów z kodami rabatowymi
+        for (const product of codeProducts) {
+          total += product.priceAfter;
+          description.push(`${product.name}: ${product.priceAfter.toFixed(2)} zł (kod rabatowy)`);
+        }
+
+        // Obliczanie dla produktów z multirabatami
+        if (multiCount > 1) {
+          const sortedMulti = [...multiProducts].sort((a, b) => a.priceBefore - b.priceBefore);
+          const cheapest = sortedMulti[0];
+          const discountInfo = multiDiscounts.find(d => d.count === multiCount);
+          let discountPrice = cheapest.priceBefore;
+          if (discountInfo) {
+            if (discountInfo.altPrice && multiCount >= 5) {
+              discountPrice = discountInfo.altPrice;
+            } else {
+              discountPrice *= (1 - discountInfo.discount);
+            }
+          }
+          total += discountPrice;
+          description.push(`${cheapest.name}: ${discountPrice.toFixed(2)} zł (multirabat ${multiCount} produktów)`);
+          for (let i = 1; i < sortedMulti.length; i++) {
+            total += sortedMulti[i].priceBefore;
+            description.push(`${sortedMulti[i].name}: ${sortedMulti[i].priceBefore.toFixed(2)} zł`);
+          }
+        } else {
+          for (const product of multiProducts) {
+            total += product.priceBefore;
+            description.push(`${product.name}: ${product.priceBefore.toFixed(2)} zł`);
+          }
+        }
+        return { total, description: description.join("<br>") };
+      }
+
+      // Testowanie wszystkich kombinacji
+      function generateCombinations(products, multi = [], code = [], index = 0) {
+        if (index === products.length) {
+          const result = calculateTotal(multi, code);
+          if (result.total < bestTotal) {
+            bestTotal = result.total;
+            bestDescription = result.description;
+          }
+          return;
+        }
+        const product = products[index];
+        if (product.discountCode) {
+          generateCombinations(products, multi, [...code, product], index + 1);
+        }
+        if (product.multidiscount) {
+          generateCombinations(products, [...multi, product], code, index + 1);
+        }
+      }
+
+      generateCombinations(products);
+      return { total: bestTotal, description: bestDescription };
+    }
+
+    addProductBtn.addEventListener('click', addProduct);
+
+    calculateBtn.addEventListener('click', () => {
+      const products = getProducts();
+      if (products.length === 0) {
+        resultDiv.innerHTML = "Dodaj przynajmniej jeden produkt.";
+        resultDiv.classList.remove('hidden');
+        return;
+      }
+      const result = calculateBestPrice(products);
+      resultDiv.innerHTML = `
+        <h2 class="text-lg font-semibold">Wynik:</h2>
+        <p><strong>Całkowity koszt:</strong> ${result.total.toFixed(2)} zł</p>
+        <p>${result.description}</p>
+      `;
+      resultDiv.classList.remove('hidden');
+    });
+
+    resetBtn.addEventListener('click', () => {
+      productsContainer.innerHTML = '';
+      resultDiv.innerHTML = '';
+      resultDiv.classList.add('hidden');
+      productCount = 0;
+      addProduct();
+    });
+
+    // Dodaj pierwszy produkt na start
+    addProduct();
+  </script>
+</body>
+</html>
